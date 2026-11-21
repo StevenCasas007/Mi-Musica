@@ -151,3 +151,21 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;paddin
 .newrow input{flex:1;min-width:0;padding:13px 16px;border-radius:999px;border:1px solid #ffffff14;background:var(--s2);color:var(--text);font-size:1rem;outline:none}
 .newrow input:focus{border-color:var(--accent)}
 .newrow .primary{margin:0}
+
+.extras{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:100%;max-width:420px;margin-top:6px}
+.pill.on{background:var(--accent);color:#000}
+#fullArtist{cursor:pointer}
+.tabs button{font-size:.82rem}
+.list-head{font-size:.9rem}
+.list-head select{background:var(--s2);color:var(--text);border:1px solid #ffffff14;border-radius:999px;padding:7px 12px;font:inherit;font-weight:600}
+.row .qb{width:36px;height:36px;border-radius:50%;background:var(--s3);color:var(--text);font-size:1rem;flex:none}
+.row.off .a::before{content:"↓ ";color:var(--accent);font-weight:800}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{color:var(--muted);font-size:.82rem;font-weight:600}
+.field input[type=text]{padding:13px 16px;border-radius:16px;border:1px solid #ffffff14;background:var(--s2);color:var(--text);font-size:1rem;outline:none}
+.field input[type=text]:focus{border-color:var(--accent)}
+.field input[type=range]{accent-color:var(--accent);width:100%}
+.lyrics{max-height:58vh;overflow-y:auto;line-height:1.7;font-size:1.05rem}
+.lyrics .ly{padding:3px 0;color:var(--muted);transition:color .2s,transform .2s}
+.lyrics .ly.on{color:var(--text);font-weight:800;font-size:1.15rem}
+.lyrics .plain{white-space:pre-wrap;color:#e6e6e6}

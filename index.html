@@ -52,6 +52,7 @@
         <button data-tab="all" class="active">Canciones</button>
         <button data-tab="favs">Favoritas</button>
         <button data-tab="lists">Listas</button>
+        <button data-tab="artists">Artistas</button>
       </nav>
       <div id="listHead" class="list-head" hidden></div>
       <div id="list"></div>
@@ -100,13 +101,61 @@
     <button id="btnMute" class="icon" title="Volumen" data-icon="volume"></button>
     <input id="vol" type="range" min="0" max="100" value="100" aria-label="Volumen">
   </div>
-  <button id="btnAddList" class="pill">+ Añadir a una lista</button>
+  <div class="extras">
+    <button id="btnRepeat" class="pill">Repetir: no</button>
+    <button id="btnSpeed" class="pill">Velocidad 1×</button>
+    <button id="btnEq" class="pill">Ecualizador</button>
+    <button id="btnLyrics" class="pill">Letra</button>
+    <button id="btnAddList" class="pill">+ Añadir a una lista</button>
+  </div>
+</div>
+
+<div id="artistSheet" class="modal" hidden>
+  <div class="sheet tall">
+    <h2 id="artistTitle"></h2>
+    <p id="artistCount" class="muted"></p>
+    <div class="opts"><button id="artistPlay" class="on">Reproducir</button><button id="artistShuffle">Mezclar</button></div>
+    <div id="artistList"></div>
+    <button id="btnCloseArtist" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="editSheet" class="modal" hidden>
+  <div class="sheet">
+    <h2>Editar canción</h2>
+    <div class="field"><label for="editTitle">Título</label><input id="editTitle" type="text" maxlength="120" autocomplete="off"></div>
+    <div class="field"><label for="editArtist">Artista (separa varios con coma)</label><input id="editArtist" type="text" maxlength="160" autocomplete="off"></div>
+    <button id="btnEditSave" class="primary small">Guardar</button>
+    <button id="btnEditReset" class="link">Restablecer nombre original</button>
+    <button id="btnEditCancel" class="link">Cancelar</button>
+  </div>
+</div>
+
+<div id="lyricsSheet" class="modal" hidden>
+  <div class="sheet tall">
+    <h2 id="lyricsTitle">Letra</h2>
+    <div id="lyricsBody" class="lyrics"></div>
+    <button id="btnCloseLyrics" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="eqSheet" class="modal" hidden>
+  <div class="sheet">
+    <h2>Ecualizador</h2>
+    <div id="eqPresets" class="opts"></div>
+    <div class="field"><label for="eqLow">Graves</label><input id="eqLow" type="range" min="-10" max="10" step="1" value="0"></div>
+    <div class="field"><label for="eqMid">Medios</label><input id="eqMid" type="range" min="-10" max="10" step="1" value="0"></div>
+    <div class="field"><label for="eqHigh">Agudos</label><input id="eqHigh" type="range" min="-10" max="10" step="1" value="0"></div>
+    <p class="muted">Nota: en algunos iPhone, con el ecualizador activo la música puede cortarse con la pantalla apagada. Si te pasa, déjalo en "Normal".</p>
+    <button id="btnCloseEq" class="link">Cerrar</button>
+  </div>
 </div>
 
 <div id="queueSheet" class="modal" hidden>
   <div class="sheet tall">
     <h2>Cola de reproducción</h2>
     <div id="queueList"></div>
+    <button id="btnQueueToList" class="pill">Guardar cola como lista</button>
     <button id="btnCloseQueue" class="link">Cerrar</button>
   </div>
 </div>
@@ -161,6 +210,9 @@
     <p id="syncState" class="muted"></p>
     <p class="muted">Si una canción no trae portada, la app la busca sola en internet por artista y título cuando la reproduces. Para buscarlas todas de una vez, usa el botón.</p>
     <p class="ver" data-ver></p>
+    <p id="offInfo" class="muted"></p>
+    <button id="btnDlFavs" class="primary small">Descargar mis favoritas</button>
+    <button id="btnClearOff" class="link">Borrar descargas</button>
     <button id="btnScan" class="primary small">Buscar carátulas de toda la biblioteca</button>
     <button id="btnCloseSettings" class="link">Cerrar</button>
   </div>

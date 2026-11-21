@@ -1,6 +1,6 @@
 /* Mi Música — PWA que reproduce tu música guardada en Google Drive */
 (() => {
-  const APP_VERSION = 7;            // sube 1 en cada entrega (también en sw.js)
+  const APP_VERSION = 9;            // sube 1 en cada entrega (también en sw.js)
   const $ = id => document.getElementById(id);
   const audio = $('audio');
   const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
@@ -20,6 +20,11 @@
   let data = clean(store.get('data', null));
   let tab = 'all', openList = null, query = '', view = 'home';
   let recentIds = store.get('recent', []);
+  let sort = store.get('sort', 'name'), repeat = 'off', speed = store.get('speed', 1), eq = store.get('eq', [0, 0, 0]);
+  let editList = false, pendingSeek = 0, counted = false, restored = false, editId = null, dlBusy = false;
+  let plays = store.get('plays', []);                    // historial: {id, t}
+  const off = store.get('off', {});                      // descargadas: id -> bytes
+  const OFF = 'mm-offline-v1', OFFURL = 'https://offline.local/';
   let sleepAt = 0, sleepAfterSong = false, sleepMinutes = 0;
   let queue = [], qi = -1, shuffle = false;
   let token = null, tokenExp = 0, tokenClient = null;
@@ -208,14 +213,15 @@
     return {
       favs: Array.isArray(d && d.favs) ? d.favs : [],
       lists: d && d.lists && typeof d.lists === 'object' ? d.lists : {},
+      edits: d && d.edits && typeof d.edits === 'object' ? d.edits : {},
       updated: (d && d.updated) || 0
     };
   }
-  function hasContent(d) { return !!(d && ((d.favs && d.favs.length) || Object.keys(d.lists || {}).length)); }
+  function hasContent(d) { return !!(d && ((d.favs && d.favs.length) || Object.keys(d.lists || {}).length || Object.keys(d.edits || {}).length)); }
   function mergeUnion(a, b) {
     const lists = { ...b.lists };
     for (const [n, ids] of Object.entries(a.lists)) lists[n] = [...new Set([...(lists[n] || []), ...ids])];
-    return { favs: [...new Set([...a.favs, ...b.favs])], lists, updated: 0 };
+    return { favs: [...new Set([...a.favs, ...b.favs])], lists, edits: { ...b.edits, ...a.edits }, updated: 0 };
   }
   function saveData() {
     data.updated = Date.now(); store.set('data', data);
@@ -236,7 +242,7 @@
   async function pushNow() {
     if (!cloudOK) return;
     clearTimeout(pushTimer);
-    const body = JSON.stringify({ v: 1, favs: data.favs, lists: data.lists, updated: data.updated });
+    const body = JSON.stringify({ v: 1, favs: data.favs, lists: data.lists, edits: data.edits, updated: data.updated });
     let id = await findDataFile();
     if (id) {
       try {
@@ -295,7 +301,7 @@
   }
   async function loadLibrary(force) {
     const cached = store.get('library', null);
-    if (cached && !force) { tracks = cached; render(); }
+    if (cached && !force) { tracks = cached; render(); restoreLast(); }
     try {
       let folderId = (CONFIG.FOLDER_ID || '').trim() || null;
       if (!folderId && CONFIG.FOLDER_NAME) folderId = await findFolderId(CONFIG.FOLDER_NAME);
@@ -309,10 +315,11 @@
       } while (pageToken);
       tracks = out.map(f => {
         const p = parseName(f.name), m = meta[f.id] || {};
-        return { id: f.id, name: f.name, title: m.title || p.title, artist: m.artist || p.artist, added: f.createdTime || '' };
+        const e = data.edits[f.id];
+        return { id: f.id, name: f.name, title: (e && e.title) || m.title || p.title, artist: e ? e.artist : (m.artist || p.artist), added: f.createdTime || '' };
       });
       store.set('library', tracks);
-      render();
+      render(); restoreLast();
       if (force) toast(tracks.length + ' canciones');
     } catch (e) { if (e.code === 'AUTH') libraryStale = true; else toast('Error al leer Drive: ' + e.message); }
   }
@@ -358,6 +365,175 @@
     return 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h},62%,46%)"/><stop offset="1" stop-color="hsl(${h2},66%,28%)"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/><text x="200" y="262" font-size="190" font-family="sans-serif" font-weight="800" text-anchor="middle" fill="rgba(255,255,255,.85)">${ch}</text></svg>`);
   }
 
+
+  // ---------- Extras v9 ----------
+  const artistsOf = t => String(t.artist || '').split(/\s*(?:,|&|\sy\s|\sfeat\.?\s|\sft\.?\s|\sx\s)\s*/i).map(s => s.trim()).filter(Boolean);
+  const dayKey = () => new Date().toLocaleDateString('en-CA');
+  function seeded(str) {
+    let s = 2166136261; for (const ch of str) s = Math.imul(s ^ ch.charCodeAt(0), 16777619);
+    return () => { s += 0x6D2B79F5; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  }
+  function sortTracks(list) {
+    const c = (x, y) => String(x).localeCompare(String(y), 'es', { sensitivity: 'base' });
+    const r = list.slice();
+    if (sort === 'artist') r.sort((x, y) => c(x.artist || '~', y.artist || '~') || c(x.title, y.title));
+    else if (sort === 'recent') r.sort((x, y) => (y.added || '').localeCompare(x.added || ''));
+    else r.sort((x, y) => c(x.title, y.title));
+    return r;
+  }
+  function logPlay(id) { plays.push({ id, t: Date.now() }); if (plays.length > 800) plays = plays.slice(-800); store.set('plays', plays); }
+
+  // Seguir donde ibas
+  function saveQueue() { store.set('lastQ', { ids: queue, qi }); }
+  function savePos() { const id = queue[qi]; if (id && audio.currentTime > 1) store.set('lastPos', { id, pos: audio.currentTime }); }
+  function restoreLast() {
+    if (restored || queue.length || !tracks.length) return;
+    restored = true;
+    const q = store.get('lastQ', null), p = store.get('lastPos', null);
+    if (!q || !Array.isArray(q.ids)) return;
+    const id = q.ids[q.qi]; if (!byId(id)) return;
+    queue = q.ids.filter(byId); qi = queue.indexOf(id); if (qi < 0) { queue = []; qi = -1; return; }
+    pendingSeek = p && p.id === id ? p.pos : 0;
+    showPlayer(byId(id), null); setPlayIcons();
+    if (pendingSeek) { $('tCur').textContent = fmt(pendingSeek); }
+  }
+  function playPause(forcePlay) {
+    if (!audio.getAttribute('src')) { if (qi >= 0 && queue.length) loadCurrent(); return; }
+    eqApply();
+    if (audio.paused) audio.play(); else if (!forcePlay) audio.pause();
+  }
+
+  // Velocidad y repetición
+  function updateExtras() {
+    $('btnRepeat').textContent = 'Repetir: ' + (repeat === 'one' ? 'canción' : repeat === 'all' ? 'lista' : 'no');
+    $('btnRepeat').classList.toggle('on', repeat !== 'off');
+    $('btnSpeed').textContent = 'Velocidad ' + speed + '×';
+    $('btnSpeed').classList.toggle('on', speed !== 1);
+    $('btnEq').classList.toggle('on', eq.some(x => x !== 0));
+    audio.defaultPlaybackRate = speed; audio.playbackRate = speed;
+  }
+
+  // Ecualizador (solo se activa si lo usas, para no afectar la reproducción con pantalla apagada)
+  let eqCtx = null, eqNodes = null;
+  const EQ_PRESETS = { 'Normal': [0, 0, 0], 'Bajos fuertes': [7, 0, -1], 'Agudos claros': [-2, 1, 6], 'Voz': [-3, 4, 2], 'Rock': [4, -2, 4] };
+  function eqBuild() {
+    if (eqCtx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
+    try {
+      eqCtx = new AC(); const src = eqCtx.createMediaElementSource(audio);
+      const mk = (type, f) => { const n = eqCtx.createBiquadFilter(); n.type = type; n.frequency.value = f; if (type === 'peaking') n.Q.value = 1; return n; };
+      eqNodes = [mk('lowshelf', 200), mk('peaking', 1000), mk('highshelf', 3500)];
+      src.connect(eqNodes[0]); eqNodes[0].connect(eqNodes[1]); eqNodes[1].connect(eqNodes[2]); eqNodes[2].connect(eqCtx.destination);
+      return true;
+    } catch { eqCtx = null; return false; }
+  }
+  function eqApply() {
+    if (!eqCtx && eq.every(x => x === 0)) return;
+    if (!eqBuild()) return;
+    eqNodes.forEach((n, i) => { n.gain.value = eq[i]; });
+    if (eqCtx.state === 'suspended') eqCtx.resume().catch(() => {});
+  }
+  function eqUI() {
+    $('eqPresets').innerHTML = Object.keys(EQ_PRESETS).map(n => `<button data-eq="${n}" class="${EQ_PRESETS[n].join() === eq.join() ? 'on' : ''}">${n}</button>`).join('');
+    $('eqPresets').querySelectorAll('button').forEach(b => b.onclick = () => { eq = EQ_PRESETS[b.dataset.eq].slice(); store.set('eq', eq); eqApply(); eqUI(); updateExtras(); });
+    ['eqLow', 'eqMid', 'eqHigh'].forEach((id, i) => { $(id).value = eq[i]; });
+  }
+
+  // Letra (lrclib.net, gratis y sin cuenta)
+  let lyricsLines = null;
+  async function openLyrics() {
+    const t = byId(queue[qi]); if (!t) return;
+    $('lyricsTitle').textContent = t.title; $('lyricsSheet').hidden = false;
+    const body = $('lyricsBody'); body.textContent = 'Buscando letra…'; lyricsLines = null;
+    try {
+      const first = artistsOf(t)[0] || '';
+      const q = new URLSearchParams({ track_name: t.title.replace(/\s*[\(\[].*?[\)\]]/g, ''), artist_name: first });
+      let r = await fetch('https://lrclib.net/api/get?' + q), j = r.ok ? await r.json() : null;
+      if (!j) { r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent((first + ' ' + t.title).trim())); const arr = r.ok ? await r.json() : []; j = arr[0] || null; }
+      if (queue[qi] !== t.id) return;
+      if (j && j.syncedLyrics) {
+        lyricsLines = j.syncedLyrics.split('\n').map(l => { const m = l.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return m ? { t: +m[1] * 60 + +m[2], s: m[3].trim() } : null; }).filter(x => x && x.s);
+        body.innerHTML = lyricsLines.map((l, i) => `<div class="ly" data-i="${i}">${esc(l.s)}</div>`).join('');
+      } else if (j && j.plainLyrics) { body.innerHTML = `<div class="plain">${esc(j.plainLyrics)}</div>`; }
+      else body.textContent = 'No encontré la letra de esta canción.';
+    } catch { body.textContent = 'No se pudo buscar la letra. Revisa tu internet.'; }
+  }
+  let lyIdx = -1;
+  function syncLyrics() {
+    if (!lyricsLines || $('lyricsSheet').hidden) return;
+    let i = -1; for (let k = 0; k < lyricsLines.length; k++) { if (lyricsLines[k].t <= audio.currentTime + 0.2) i = k; else break; }
+    if (i === lyIdx) return; lyIdx = i;
+    document.querySelectorAll('#lyricsBody .ly').forEach(e => e.classList.toggle('on', +e.dataset.i === i));
+    const el = document.querySelector('#lyricsBody .ly.on'); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  // Descargas para oír sin internet
+  async function offGet(id) {
+    if (!off[id] || !window.caches) return null;
+    try { const r = await (await caches.open(OFF)).match(OFFURL + id); return r ? await r.blob() : null; } catch { return null; }
+  }
+  async function offSave(id) {
+    const blob = await (await driveFetch(`${API}/files/${id}?alt=media`)).blob();
+    await (await caches.open(OFF)).put(OFFURL + id, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg' } }));
+    off[id] = blob.size || 1; store.set('off', off);
+  }
+  async function offRemove(ids) {
+    const c = await caches.open(OFF);
+    for (const id of ids) { await c.delete(OFFURL + id); delete off[id]; }
+    store.set('off', off);
+  }
+  async function downloadMany(ids) {
+    if (!window.caches) { toast('Tu navegador no permite descargas'); return; }
+    ids = ids.filter(id => !off[id] && byId(id));
+    if (!ids.length) { toast('Ya están descargadas'); return; }
+    if (dlBusy) { toast('Ya hay una descarga en curso'); return; }
+    dlBusy = true; let n = 0;
+    try {
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      for (const id of ids) { await offSave(id); n++; toast(`Descargando ${n}/${ids.length}`); }
+      toast(`Listo: ${n} descargada${n === 1 ? '' : 's'}`);
+    } catch (e) { toast(e.code === 'AUTH' ? 'Toca “Renovar sesión” y vuelve a intentar' : 'No se pudo descargar: ' + (e.message || 'sin espacio')); }
+    finally { dlBusy = false; render(); updateOffInfo(); }
+  }
+  async function updateOffInfo() {
+    const ids = Object.keys(off), mb = ids.reduce((s, k) => s + off[k], 0) / 1048576;
+    $('offInfo').textContent = ids.length ? `${ids.length} canciones descargadas (${mb.toFixed(0)} MB). Suenan sin internet.` : 'No hay canciones descargadas. Puedes descargarlas desde el menú ⋯ de cada canción.';
+  }
+
+  // Artista
+  function openArtist(name) {
+    const list = tracks.filter(t => artistsOf(t).some(x => fold(x) === fold(name)));
+    const ids = list.map(t => t.id);
+    $('artistTitle').textContent = name; $('artistCount').textContent = ids.length + ' canciones';
+    $('artistList').innerHTML = list.map(t => rowHTML(t, queue[qi])).join('');
+    $('artistList').querySelectorAll('.row[data-id]').forEach(r => r.onclick = e => {
+      if (e.target.dataset.more) { trackMenu(e.target.dataset.more); return; }
+      $('artistSheet').hidden = true; playQueue(ids, ids.indexOf(r.dataset.id));
+    });
+    $('artistPlay').onclick = () => { $('artistSheet').hidden = true; shuffle = false; $('btnShuffle').classList.remove('on'); playQueue(ids, 0); };
+    $('artistShuffle').onclick = () => { $('artistSheet').hidden = true; shuffle = true; $('btnShuffle').classList.add('on'); playQueue(ids, Math.random() * ids.length | 0); };
+    $('artistSheet').hidden = false;
+  }
+
+  // Editar nombre y artista
+  function openEdit(id) {
+    const t = byId(id); if (!t) return; editId = id;
+    $('editTitle').value = t.title; $('editArtist').value = t.artist || '';
+    $('btnEditReset').hidden = !data.edits[id]; $('editSheet').hidden = false;
+  }
+  function saveEdit(reset) {
+    const t = byId(editId); if (!t) return;
+    if (reset) { delete data.edits[editId]; const p = parseName(t.name); t.title = p.title; t.artist = p.artist; delete meta[t.id]; store.set('meta', meta); }
+    else {
+      const title = $('editTitle').value.trim(), artist = $('editArtist').value.trim();
+      if (!title) return;
+      data.edits[editId] = { title, artist }; t.title = title; t.artist = artist;
+    }
+    $('editSheet').hidden = true; saveData(); store.set('library', tracks); render();
+    if (queue[qi] === editId) showPlayer(t, currentCover);
+    toast(reset ? 'Nombre restablecido' : 'Guardado');
+  }
+
   // ---------- Pantallas: Inicio, Buscar, Biblioteca ----------
   const TITLES = { search: 'Buscar', lib: 'Tu biblioteca' };
   function greeting() { const h = new Date().getHours(); return h < 5 ? 'Buenas noches' : h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches'; }
@@ -370,7 +546,9 @@
     render();
   }
   function syncTabs() { document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab)); }
+  function applyEdits() { tracks.forEach(t => { const e = data.edits[t.id]; if (e) { t.title = e.title; t.artist = e.artist; } }); }
   function render() {
+    applyEdits();
     if (view === 'home') renderHome();
     else if (view === 'search') renderSearch();
     else renderLib();
@@ -389,7 +567,7 @@
     return tracks.filter(t => { const h = fold(t.title + ' ' + t.artist); return words.every(w => h.includes(w)); });
   }
   function rowHTML(t, curId) {
-    return `<div class="row${t.id === curId ? ' playing' : ''}" data-id="${t.id}">${coverHTML(t)}<div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || 'Artista desconocido')}</div></div><button class="more icon" data-more="${t.id}">⋯</button></div>`;
+    return `<div class="row${t.id === curId ? ' playing' : ''}${off[t.id] ? ' off' : ''}" data-id="${t.id}">${coverHTML(t)}<div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || 'Artista desconocido')}</div></div><button class="more icon" data-more="${t.id}">⋯</button></div>`;
   }
   function bindRows(el, ids) {
     el.querySelectorAll('.row[data-id]').forEach(r => r.onclick = e => {
@@ -411,20 +589,27 @@
     const favs = data.favs.map(byId).filter(Boolean).slice(0, 14);
     const fresh = tracks.filter(t => t.added).sort((a, b) => b.added.localeCompare(a.added)).slice(0, 14);
     const mine = Object.keys(data.lists);
+    const now = Date.now(), rnd = seeded('mix' + dayKey() + currentUid);
+    const mix = tracks.map(t => [rnd() + (data.favs.includes(t.id) ? .4 : 0), t]).sort((x, y) => y[0] - x[0]).slice(0, 25).map(x => x[1]);
+    const cnt = {}; plays.filter(p => now - p.t < 30 * 864e5).forEach(p => { cnt[p.id] = (cnt[p.id] || 0) + 1; });
+    const top = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x]).map(byId).filter(Boolean).slice(0, 10);
+    const lastPlayed = {}; plays.forEach(p => { lastPlayed[p.id] = Math.max(lastPlayed[p.id] || 0, p.t); });
+    const rnd2 = seeded('old' + dayKey());
+    const old = plays.length >= 10 ? tracks.filter(t => !lastPlayed[t.id] || now - lastPlayed[t.id] > 45 * 864e5).map(t => [rnd2(), t]).sort((x, y) => x[0] - y[0]).slice(0, 14).map(x => x[1]) : [];
     const shelf = (title, key, items) => !items.length ? '' :
       `<div class="sh"><h2>${title}</h2></div><div class="shelf">${items.map(t =>
         `<div class="card" data-shelf="${key}" data-id="${t.id}">${coverHTML(t)}<div class="ct">${esc(t.title)}</div><div class="ca">${esc(t.artist || 'Artista desconocido')}</div></div>`).join('')}</div>`;
     let h = `<div class="hero"><div><div class="hero-t">Tu música,<br>sin anuncios</div><div class="hero-s">${tracks.length} canciones en tu Drive</div></div><button id="btnShuffleAll" class="cta">${svg('shuffle')} Mezclar todo</button></div>`;
-    h += shelf('Escuchado recientemente', 'recent', recent) + shelf('Tus favoritas', 'favs', favs);
+    h += shelf('Tu mezcla del día', 'mix', mix) + shelf('Escuchado recientemente', 'recent', recent) + shelf('Lo más escuchado este mes', 'top', top) + shelf('Tus favoritas', 'favs', favs);
     if (mine.length) {
       h += `<div class="sh"><h2>Tus listas</h2></div><div class="shelf">${mine.map(n => {
         const hh = hueOf(n);
         return `<div class="card" data-list="${esc(n)}"><div class="cv ph" style="--h:${hh};--h2:${(hh + 40) % 360}">≡</div><div class="ct">${esc(n)}</div><div class="ca">${data.lists[n].length} canciones</div></div>`;
       }).join('')}</div>`;
     }
-    h += shelf('Nuevas en tu biblioteca', 'fresh', fresh);
+    h += shelf('Nuevas en tu biblioteca', 'fresh', fresh) + shelf('Hace tiempo que no las oyes', 'old', old);
     el.innerHTML = h;
-    const sets = { recent, favs, fresh };
+    const sets = { mix, recent, top, favs, fresh, old };
     el.querySelectorAll('.card[data-id]').forEach(c => c.onclick = () => {
       const ids = sets[c.dataset.shelf].map(t => t.id);
       playQueue(ids, ids.indexOf(c.dataset.id));
@@ -453,23 +638,52 @@
 
   function renderLib() {
     const el = $('list'), head = $('listHead');
-    head.hidden = !(tab === 'lists');
+    head.hidden = tab === 'favs';
+    if (tab === 'artists') {
+      head.hidden = true;
+      const map = {};
+      tracks.forEach(t => artistsOf(t).forEach(n => { const k = fold(n); (map[k] = map[k] || { n, c: 0 }).c++; }));
+      const arr = Object.values(map).sort((x, y) => x.n.localeCompare(y.n, 'es', { sensitivity: 'base' }));
+      el.innerHTML = arr.length ? arr.map(x => { const hh = hueOf(x.n); return `<div class="row" data-artist="${esc(x.n)}"><div class="cv ph" style="--h:${hh};--h2:${(hh + 40) % 360};border-radius:50%">${esc(x.n.charAt(0).toUpperCase())}</div><div class="info"><div class="t">${esc(x.n)}</div><div class="a">${x.c} canciones</div></div></div>`; }).join('') : `<div class="empty">${tracks.length ? 'Sin artistas.' : 'Cargando tu música…'}</div>`;
+      el.querySelectorAll('[data-artist]').forEach(r => r.onclick = () => openArtist(r.dataset.artist));
+      return;
+    }
+    if (tab === 'all') {
+      head.innerHTML = `<span style="flex:1">${tracks.length} canciones</span><select id="sortSel"><option value="name">Por nombre</option><option value="artist">Por artista</option><option value="recent">Recientes</option></select>`;
+      $('sortSel').value = sort; $('sortSel').onchange = e => { sort = e.target.value; store.set('sort', sort); render(); };
+      if (!tracks.length) { el.innerHTML = '<div class="empty">Cargando tu música…</div>'; return; }
+      const list = sortTracks(tracks);
+      el.innerHTML = list.map(t => rowHTML(t, queue[qi])).join('');
+      bindRows(el, list.map(t => t.id));
+      return;
+    }
     if (tab === 'lists' && !openList) {
       head.innerHTML = '<span style="flex:1">Mis listas</span><button id="newList">+ Nueva</button>';
       $('newList').onclick = newList;
       const names = Object.keys(data.lists);
       el.innerHTML = names.length ? names.map(n => { const hh = hueOf(n); return `<div class="row" data-list="${esc(n)}"><div class="cv ph" style="--h:${hh};--h2:${(hh + 40) % 360}">≡</div><div class="info"><div class="t">${esc(n)}</div><div class="a">${data.lists[n].length} canciones</div></div></div>`; }).join('')
         : '<div class="empty">Aún no tienes listas.<br>Crea una con “+ Nueva”.</div>';
-      el.querySelectorAll('[data-list]').forEach(r => r.onclick = () => { openList = r.dataset.list; render(); });
+      el.querySelectorAll('[data-list]').forEach(r => r.onclick = () => { openList = r.dataset.list; editList = false; render(); });
       return;
     }
     if (tab === 'lists' && openList) {
-      head.innerHTML = `<button id="back">‹ Listas</button><span style="flex:1;text-align:center">${esc(openList)}</span><button id="delList">Borrar</button>`;
-      $('back').onclick = () => { openList = null; render(); };
+      head.innerHTML = `<button id="back">‹</button><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(openList)}</span><button id="editBtn">${editList ? 'Listo' : 'Editar'}</button><button id="dlList">Descargar</button><button id="delList">Borrar</button>`;
+      $('back').onclick = () => { openList = null; editList = false; render(); };
+      $('editBtn').onclick = () => { editList = !editList; render(); };
+      $('dlList').onclick = () => downloadMany((data.lists[openList] || []).filter(byId));
       $('delList').onclick = async () => { if (await ask('¿Borrar la lista?', '"' + openList + '" se eliminará (las canciones siguen en tu biblioteca).', 'Borrar')) { delete data.lists[openList]; saveData(); openList = null; render(); } };
     }
     const list = visibleTracks();
     if (!list.length) { el.innerHTML = `<div class="empty">${tracks.length ? 'Nada por aquí.' : 'Cargando tu música…'}</div>`; return; }
+    if (tab === 'lists' && openList && editList) {
+      el.innerHTML = list.map((t, i) => `<div class="row" data-id="${t.id}">${coverHTML(t)}<div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || 'Artista desconocido')}</div></div><button class="qb" data-up="${i}">↑</button><button class="qb" data-down="${i}">↓</button><button class="qb" data-del="${i}">✕</button></div>`).join('');
+      const ids = list.map(t => t.id);
+      const commit = arr => { data.lists[openList] = arr; saveData(); render(); };
+      el.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { const x = ids.slice(); [x[i - 1], x[i]] = [x[i], x[i - 1]]; commit(x); } });
+      el.querySelectorAll('[data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down; if (i < ids.length - 1) { const x = ids.slice(); [x[i + 1], x[i]] = [x[i], x[i + 1]]; commit(x); } });
+      el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => commit(ids.filter((_, i) => i !== +b.dataset.del)));
+      return;
+    }
     el.innerHTML = list.map(t => rowHTML(t, queue[qi])).join('');
     bindRows(el, list.map(t => t.id));
   }
@@ -489,13 +703,13 @@
   let listTarget = null;
   function openListSheet(id) {
     listTarget = id || null;
-    $('listSheetTitle').textContent = id ? 'Añadir a una lista' : 'Nueva lista';
+    $('listSheetTitle').textContent = Array.isArray(id) ? 'Guardar la cola como lista' : id ? 'Añadir a una lista' : 'Nueva lista';
     $('newListName').value = '';
     $('btnCreateList').textContent = id ? 'Crear y añadir' : 'Crear';
     const names = Object.keys(data.lists);
     $('listOpts').hidden = !id || !names.length;
     $('listOpts').innerHTML = !id ? '' : names.map(n => {
-      const hh = hueOf(n), has = data.lists[n].includes(id);
+      const hh = hueOf(n), has = [].concat(id).every(x => data.lists[n].includes(x));
       return `<button data-pick="${esc(n)}"><div class="cv ph" style="--h:${hh};--h2:${(hh + 40) % 360}">≡</div><div class="info"><div class="t">${esc(n)}</div><div class="a">${data.lists[n].length} canciones</div></div>${has ? '<span class="chk">✓</span>' : ''}</button>`;
     }).join('');
     $('listOpts').querySelectorAll('[data-pick]').forEach(b => b.onclick = () => finishList(b.dataset.pick));
@@ -504,11 +718,13 @@
   }
   function finishList(name) {
     name = (name || '').trim(); if (!name) return;
-    const id = listTarget; $('listSheet').hidden = true;
+    const ids = listTarget ? [].concat(listTarget) : []; $('listSheet').hidden = true;
     if (!data.lists[name]) data.lists[name] = [];
-    if (id) {
-      if (data.lists[name].includes(id)) { toast('Ya estaba en "' + name + '"'); render(); return; }
-      data.lists[name].push(id); toast('Añadida a "' + name + '"');
+    if (ids.length) {
+      const add = ids.filter(x => !data.lists[name].includes(x));
+      if (!add.length) { toast('Ya estaba en "' + name + '"'); render(); return; }
+      data.lists[name].push(...add);
+      toast(ids.length > 1 ? `${add.length} canciones añadidas a "${name}"` : 'Añadida a "' + name + '"');
     } else toast('Lista "' + name + '" creada');
     saveData(); render();
   }
@@ -525,12 +741,19 @@
       `<button data-act="fav">${fav ? 'Quitar de favoritas' : 'Añadir a favoritas'}</button>` +
       '<button data-act="list">Añadir a una lista</button>' +
       '<button data-act="next">Reproducir a continuación</button>' +
-      '<button data-act="end">Añadir al final de la cola</button>';
+      '<button data-act="end">Añadir al final de la cola</button>' +
+      (artistsOf(t).length ? '<button data-act="artist">Ver artista</button>' : '') +
+      '<button data-act="edit">Editar nombre y artista</button>' +
+      (off[id] ? '<button data-act="undl">Quitar descarga</button>' : '<button data-act="dl">Descargar para oír sin internet</button>');
     $('trackSheet').hidden = false;
   }
   function trackAction(act) {
     const id = sheetTrack; $('trackSheet').hidden = true; if (!id) return;
     if (act === 'fav') toggleFav(id);
+    else if (act === 'artist') { const t = byId(id); openArtist(artistsOf(t)[0]); }
+    else if (act === 'edit') openEdit(id);
+    else if (act === 'dl') downloadMany([id]);
+    else if (act === 'undl') offRemove([id]).then(() => { toast('Descarga quitada'); render(); updateOffInfo(); });
     else if (act === 'list') addToList(id);
     else if (act === 'next' || act === 'end') {
       if (qi < 0 || !queue.length) { playQueue([id], 0); return; }
@@ -550,7 +773,7 @@
   // ---------- Reproducción ----------
   function fetchBlob(id) {
     if (!cache.has(id)) {
-      const p = driveFetch(`${API}/files/${id}?alt=media`).then(r => r.blob());
+      const p = offGet(id).then(b => b || driveFetch(`${API}/files/${id}?alt=media`).then(r => r.blob()));
       p.catch(() => cache.delete(id));
       cache.set(id, p);
       if (cache.size > 5) cache.delete(cache.keys().next().value);
@@ -558,7 +781,7 @@
     return cache.get(id);
   }
   function playQueue(ids, index) {
-    queue = ids.slice(); qi = index;
+    pendingSeek = 0; queue = ids.slice(); qi = index;
     if (shuffle) { const c = queue[qi]; queue = shuffled(queue.filter(x => x !== c)); queue.unshift(c); qi = 0; }
     loadCurrent();
   }
@@ -566,13 +789,16 @@
 
   async function loadCurrent() {
     const id = queue[qi], t = byId(id); if (!t) return;
+    counted = false; lyIdx = -1; saveQueue();
     showPlayer(t, null);
+    if (!$('lyricsSheet').hidden) openLyrics();
     try {
       const blob = await fetchBlob(id);
       if (queue[qi] !== id) return;                       // el usuario cambió de canción mientras cargaba
       if (currentUrl) URL.revokeObjectURL(currentUrl);
       currentUrl = URL.createObjectURL(blob);
-      audio.src = currentUrl;
+      audio.src = currentUrl; audio.defaultPlaybackRate = speed; audio.playbackRate = speed; eqApply();
+      if (pendingSeek > 1) { const ps = pendingSeek; pendingSeek = 0; audio.addEventListener('loadedmetadata', () => { try { audio.currentTime = Math.min(ps, Math.max(0, audio.duration - 1)); } catch {} }, { once: true }); }
       await audio.play().catch(() => {});
       readTags(blob, t);
       pushRecent(id);
@@ -608,7 +834,7 @@
     });
   }
   function applyTextTags(t, tg) {
-    if (!(tg.title || tg.artist)) return;
+    if (!(tg.title || tg.artist) || data.edits[t.id]) return;
     t.title = tg.title || t.title; t.artist = tg.artist || t.artist;
     meta[t.id] = { title: t.title, artist: t.artist };
     store.set('meta', meta);
@@ -796,7 +1022,7 @@
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
     const set = (a, f) => { try { ms.setActionHandler(a, f); } catch {} };
-    set('play', () => audio.play());
+    set('play', () => playPause(true));
     set('pause', () => audio.pause());
     set('previoustrack', prev);
     set('nexttrack', next);
@@ -811,12 +1037,13 @@
   }
 
   // ---------- Eventos ----------
+  let ontimeupdate_t = 0;
   function bind() {
     $('btnLogin').onclick = () => {
       if (CONFIG.CLIENT_ID.startsWith('PEGA_AQUI')) { $('loginMsg').textContent = 'Falta configurar tu Client ID en config.js (mira el README).'; return; }
       $('loginMsg').textContent = '';
       // si Google aún está cargando (internet lento), espera unos segundos antes de rendirse
-      waitGoogle(6000).then(() => requestToken('select_account consent', true)).catch(e => { $('loginMsg').textContent = authMsg(e.message); });
+      waitGoogle(6000).then(() => requestToken('select_account', true)).catch(e => { $('loginMsg').textContent = authMsg(e.message); });
     };
     $('btnLogout').onclick = async () => {
       if (!(await ask('¿Cerrar sesión?', 'Podrás entrar de nuevo con la misma cuenta u otra.', 'Salir'))) return;
@@ -852,8 +1079,7 @@
     $('listSheet').onclick = e => { if (e.target === $('listSheet')) $('listSheet').hidden = true; };
     $('trackSheet').onclick = e => { const a = e.target.dataset && e.target.dataset.act; if (a) trackAction(a); else if (e.target === $('trackSheet') || e.target.id === 'btnCloseTrack') $('trackSheet').hidden = true; };
     $('btnShuffle').classList.toggle('on', shuffle);
-    const toggle = () => audio.paused ? audio.play() : audio.pause();
-    $('btnPlay').onclick = $('miniPlay').onclick = e => { e.stopPropagation(); toggle(); };
+    $('btnPlay').onclick = $('miniPlay').onclick = e => { e.stopPropagation(); playPause(); };
     $('btnNext').onclick = $('miniNext').onclick = e => { e.stopPropagation(); next(); };
     $('btnPrev').onclick = prev;
     $('btnShuffle').onclick = () => {
@@ -862,6 +1088,25 @@
       toast(shuffle ? 'Aleatorio activado' : 'Aleatorio desactivado');
     };
     $('btnFav').onclick = () => queue[qi] && toggleFav(queue[qi]);
+    $('btnRepeat').onclick = () => { repeat = repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off'; updateExtras(); };
+    $('btnSpeed').onclick = () => { const s = [1, 1.25, 1.5, 2, 0.75]; speed = s[(s.indexOf(speed) + 1) % s.length]; store.set('speed', speed); updateExtras(); };
+    $('btnEq').onclick = () => { eqUI(); $('eqSheet').hidden = false; };
+    $('btnCloseEq').onclick = () => $('eqSheet').hidden = true;
+    ['eqLow', 'eqMid', 'eqHigh'].forEach((id, i) => { $(id).oninput = e => { eq[i] = +e.target.value; store.set('eq', eq); eqApply(); updateExtras(); eqUI(); }; });
+    $('btnLyrics').onclick = openLyrics;
+    $('btnCloseLyrics').onclick = () => $('lyricsSheet').hidden = true;
+    $('fullArtist').onclick = () => { const t = byId(queue[qi]); const n = t && artistsOf(t)[0]; if (n) openArtist(n); };
+    $('btnCloseArtist').onclick = () => $('artistSheet').hidden = true;
+    $('btnEditSave').onclick = () => saveEdit(false);
+    $('btnEditReset').onclick = () => saveEdit(true);
+    $('btnEditCancel').onclick = () => $('editSheet').hidden = true;
+    $('btnQueueToList').onclick = () => { if (queue.length) { $('queueSheet').hidden = true; openListSheet(queue.slice()); } };
+    $('btnDlFavs').onclick = () => downloadMany(data.favs);
+    $('btnClearOff').onclick = async () => { if (await ask('¿Borrar las descargas?', 'Las canciones seguirán en tu Drive, solo se quitan de este celular.', 'Borrar')) { await offRemove(Object.keys(off)); render(); updateOffInfo(); toast('Descargas borradas'); } };
+    ['artistSheet', 'editSheet', 'lyricsSheet', 'eqSheet'].forEach(id => { $(id).addEventListener('click', e => { if (e.target === $(id)) $(id).hidden = true; }); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePos(); });
+    audio.addEventListener('pause', savePos);
+    updateExtras();
     $('btnAddList').onclick = () => queue[qi] && addToList(queue[qi]);
     $('mini').onclick = () => $('full').hidden = false;
     $('btnClose').onclick = () => $('full').hidden = true;
@@ -871,7 +1116,7 @@
     $('btnSettings').onclick = () => {
       $('syncState').textContent = cloudOK ? '☁ Tus listas y favoritas se guardan en tu cuenta de Google.'
         : 'Tus listas y favoritas solo se guardan en este celular. Para guardarlas en tu cuenta: cierra sesión, entra de nuevo y acepta el permiso de "datos de la app".';
-      $('settings').hidden = false;
+      updateOffInfo(); $('settings').hidden = false;
     };
     $('btnCloseSettings').onclick = () => $('settings').hidden = true;
     $('settings').onclick = e => { if (e.target === $('settings')) $('settings').hidden = true; };
@@ -883,15 +1128,21 @@
       $('btnMute').innerHTML = svg(v === 0 ? 'mute' : 'volume'); store.set('vol', v);
     };
     let lastVol = 1;
-    setVol(store.get('vol', 1));
+    try { setVol(store.get('vol', 1)); } catch (e) { console.warn(e); }
     $('vol').oninput = e => { const v = e.target.value / 100; if (v > 0) lastVol = v; setVol(v); };
     $('btnMute').onclick = () => { if (audio.volume > 0) { lastVol = audio.volume; setVol(0); } else setVol(lastVol || 1); };
 
     audio.onplay = audio.onpause = () => { setPlayIcons(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing'; };
-    audio.onended = () => { if (sleepAfterSong) { sleepAfterSong = false; updateSleepUI(); toast('Música detenida. ¡Buenas noches!'); return; } next(); };
+    audio.onended = () => {
+      if (repeat === 'one' && !sleepAfterSong) { audio.currentTime = 0; counted = false; audio.play(); return; }
+      if (repeat === 'off' && qi === queue.length - 1 && !sleepAfterSong) { audio.pause(); audio.currentTime = 0; return; }
+      if (sleepAfterSong) { sleepAfterSong = false; updateSleepUI(); toast('Música detenida. ¡Buenas noches!'); return; } next(); };
     audio.onerror = () => { if (!audio.getAttribute('src')) return; toast('Error al reproducir, pasando a la siguiente…'); setTimeout(next, 800); };
     audio.ontimeupdate = () => {
       const d = audio.duration, c = audio.currentTime;
+      if (!counted && c > 25 && queue[qi]) { counted = true; logPlay(queue[qi]); }
+      if (Date.now() - (ontimeupdate_t || 0) > 5000) { ontimeupdate_t = Date.now(); savePos(); }
+      syncLyrics();
       if (isFinite(d) && d > 0) {
         $('seek').value = c / d * 1000; $('miniBar').style.width = (c / d * 100) + '%';
         $('tCur').textContent = fmt(c); $('tDur').textContent = fmt(d);
