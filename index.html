@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Mi Música</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="login" class="screen">
+  <div class="login-box">
+    <div class="logo" data-icon="note"></div>
+    <h1>Mi Música</h1>
+    <p>Tu música de Google Drive, sin anuncios.</p>
+    <button id="btnLogin" class="primary">Entrar con Google</button>
+    <p id="loginMsg" class="muted"></p>
+  </div>
+</section>
+
+<section id="app" class="screen" hidden>
+  <div id="authBar" class="authbar" hidden><span id="authMsg">Tu sesión de Google venció.</span><button id="btnRenew">Renovar sesión</button></div>
+
+  <header class="top">
+    <h1 id="greeting">Mi Música</h1>
+    <button id="btnSettings" class="icon" title="Ajustes" data-icon="gear"></button>
+    <button id="btnRefresh" class="icon" title="Actualizar biblioteca" data-icon="refresh"></button>
+    <button id="btnLogout" class="icon" title="Salir" data-icon="power"></button>
+  </header>
+
+  <div id="views">
+    <div id="viewHome" class="view"></div>
+
+    <div id="viewSearch" class="view" hidden>
+      <div class="searchbar">
+        <span class="si" data-icon="search"></span>
+        <input id="search" type="search" placeholder="¿Qué quieres escuchar?" autocomplete="off">
+      </div>
+      <div id="chips" class="chips"></div>
+      <div id="searchList"></div>
+    </div>
+
+    <div id="viewLib" class="view" hidden>
+      <nav class="tabs">
+        <button data-tab="all" class="active">Canciones</button>
+        <button data-tab="favs">Favoritas</button>
+        <button data-tab="lists">Listas</button>
+      </nav>
+      <div id="listHead" class="list-head" hidden></div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <nav id="nav" class="nav">
+    <button data-view="home" class="active"><span data-icon="home"></span><i>Inicio</i></button>
+    <button data-view="search"><span data-icon="search"></span><i>Buscar</i></button>
+    <button data-view="lib"><span data-icon="library"></span><i>Biblioteca</i></button>
+  </nav>
+</section>
+
+<div id="mini" class="mini" hidden>
+  <img id="miniCover" alt="">
+  <div class="mini-info"><div id="miniTitle" class="t"></div><div id="miniArtist" class="a"></div></div>
+  <button id="miniPlay" class="icon big" data-icon="play"></button>
+  <button id="miniNext" class="icon" data-icon="next"></button>
+  <div class="mini-bar"><div id="miniBar"></div></div>
+</div>
+
+<div id="full" class="full" hidden>
+  <div class="full-top">
+    <button id="btnClose" class="icon" title="Cerrar" data-icon="down"></button>
+    <span class="full-label">Sonando ahora</span>
+    <button id="btnQueue" class="icon" title="Cola de reproducción" data-icon="queue"></button>
+  </div>
+  <img id="fullCover" alt="">
+  <div class="full-info">
+    <div class="full-text">
+      <div id="fullTitle" class="t"></div>
+      <div id="fullArtist" class="a"></div>
+    </div>
+    <button id="btnFav" class="icon" title="Favorita" data-icon="heart"></button>
+  </div>
+  <input id="seek" type="range" min="0" max="1000" value="0">
+  <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+  <div class="controls">
+    <button id="btnShuffle" class="icon" title="Aleatorio" data-icon="shuffle"></button>
+    <button id="btnPrev" class="icon" data-icon="prev"></button>
+    <button id="btnPlay" class="icon play" data-icon="play"></button>
+    <button id="btnNext" class="icon" data-icon="next"></button>
+    <button id="btnSleep" class="icon" title="Temporizador para dormir" data-icon="moon"></button>
+  </div>
+  <button id="btnAddList" class="pill">+ Añadir a una lista</button>
+</div>
+
+<div id="queueSheet" class="modal" hidden>
+  <div class="sheet tall">
+    <h2>Cola de reproducción</h2>
+    <div id="queueList"></div>
+    <button id="btnCloseQueue" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="sleepSheet" class="modal" hidden>
+  <div class="sheet">
+    <h2>Temporizador para dormir</h2>
+    <div class="opts">
+      <button data-sleep="15">15 min</button>
+      <button data-sleep="30">30 min</button>
+      <button data-sleep="45">45 min</button>
+      <button data-sleep="60">60 min</button>
+      <button data-sleep="end" class="wide">Al terminar la canción</button>
+      <button data-sleep="off" class="wide">Desactivar</button>
+    </div>
+    <p id="sleepInfo" class="muted"></p>
+    <button id="btnCloseSleep" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="trackSheet" class="modal" hidden>
+  <div class="sheet">
+    <h2 id="trackSheetTitle"></h2>
+    <div id="trackSheetOpts" class="opts one"></div>
+    <button id="btnCloseTrack" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="settings" class="modal" hidden>
+  <div class="sheet">
+    <h2>Ajustes</h2>
+    <p id="syncState" class="muted"></p>
+    <p class="muted">Si una canción no trae portada, la app la busca sola en internet por artista y título cuando la reproduces. Para buscarlas todas de una vez, usa el botón.</p>
+    <button id="btnScan" class="primary small">Buscar carátulas de toda la biblioteca</button>
+    <button id="btnCloseSettings" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<audio id="audio" preload="auto"></audio>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
