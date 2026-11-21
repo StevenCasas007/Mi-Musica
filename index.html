@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0a0f0d">
+<meta name="theme-color" content="#121212">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Mi Música</title>
@@ -21,6 +21,7 @@
     <p>Tu música de Google Drive, sin anuncios.</p>
     <button id="btnLogin" class="primary">Entrar con Google</button>
     <p id="loginMsg" class="muted"></p>
+    <p class="ver" data-ver></p>
   </div>
 </section>
 
@@ -95,6 +96,10 @@
     <button id="btnNext" class="icon" data-icon="next"></button>
     <button id="btnSleep" class="icon" title="Temporizador para dormir" data-icon="moon"></button>
   </div>
+  <div class="vol">
+    <button id="btnMute" class="icon" title="Volumen" data-icon="volume"></button>
+    <input id="vol" type="range" min="0" max="100" value="100" aria-label="Volumen">
+  </div>
   <button id="btnAddList" class="pill">+ Añadir a una lista</button>
 </div>
 
@@ -155,6 +160,7 @@
     <h2>Ajustes</h2>
     <p id="syncState" class="muted"></p>
     <p class="muted">Si una canción no trae portada, la app la busca sola en internet por artista y título cuando la reproduces. Para buscarlas todas de una vez, usa el botón.</p>
+    <p class="ver" data-ver></p>
     <button id="btnScan" class="primary small">Buscar carátulas de toda la biblioteca</button>
     <button id="btnCloseSettings" class="link">Cerrar</button>
   </div>

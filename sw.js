@@ -1,6 +1,6 @@
 // Service worker: guarda la "carcasa" de la app para que abra rápido.
 // La música NO pasa por aquí (va directo de Drive al reproductor).
-const CACHE = 'mi-musica-v6';
+const CACHE = 'mi-musica-v7';
 const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

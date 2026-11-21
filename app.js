@@ -1,5 +1,6 @@
 /* Mi Música — PWA que reproduce tu música guardada en Google Drive */
 (() => {
+  const APP_VERSION = 7;            // sube 1 en cada entrega (también en sw.js)
   const $ = id => document.getElementById(id);
   const audio = $('audio');
   const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
@@ -333,10 +334,15 @@
     refresh: ['<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>', 'line'],
     power: ['<path d="M12 3.5v8M6.6 7a8 8 0 1 0 10.8 0"/>', 'line'],
     down: ['<path d="M6 9.5l6 6 6-6"/>', 'line'],
+    volume: ['<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4zM15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/>', 'line'],
+    mute: ['<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4zM16 9.5l5 5M21 9.5l-5 5"/>', 'line'],
     note: ['<path d="M9 17.5V6.5l9-2v11M9 17.5a2.5 2.5 0 1 1-2.5-2.5A2.5 2.5 0 0 1 9 17.5zM18 15.5a2.5 2.5 0 1 1-2.5-2.5A2.5 2.5 0 0 1 18 15.5z"/>', 'line']
   };
   const svg = n => `<svg viewBox="0 0 24 24" class="ico ${ICONS[n][1]}" aria-hidden="true">${ICONS[n][0]}</svg>`;
-  const paintIcons = () => document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = svg(el.dataset.icon); });
+  const paintIcons = () => {
+    document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = svg(el.dataset.icon); });
+    document.querySelectorAll('[data-ver]').forEach(el => { el.textContent = 'Versión ' + APP_VERSION; });
+  };
 
   // ---------- Portadas de relleno: un color distinto por canción ----------
   const hueOf = s => { let h = 7; for (const c of String(s || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; };
@@ -870,6 +876,16 @@
     $('btnCloseSettings').onclick = () => $('settings').hidden = true;
     $('settings').onclick = e => { if (e.target === $('settings')) $('settings').hidden = true; };
     $('btnScan').onclick = scanCovers;
+
+    // Volumen (en iPhone el volumen lo controlan los botones del teléfono)
+    const setVol = v => {
+      v = Math.max(0, Math.min(1, v)); audio.volume = v; $('vol').value = Math.round(v * 100);
+      $('btnMute').innerHTML = svg(v === 0 ? 'mute' : 'volume'); store.set('vol', v);
+    };
+    let lastVol = 1;
+    setVol(store.get('vol', 1));
+    $('vol').oninput = e => { const v = e.target.value / 100; if (v > 0) lastVol = v; setVol(v); };
+    $('btnMute').onclick = () => { if (audio.volume > 0) { lastVol = audio.volume; setVol(0); } else setVol(lastVol || 1); };
 
     audio.onplay = audio.onpause = () => { setPlayIcons(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing'; };
     audio.onended = () => { if (sleepAfterSong) { sleepAfterSong = false; updateSleepUI(); toast('Música detenida. ¡Buenas noches!'); return; } next(); };
