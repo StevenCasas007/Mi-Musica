@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0c12">
+<meta name="theme-color" content="#0a0f0d">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Mi Música</title>
@@ -127,6 +127,26 @@
     <h2 id="trackSheetTitle"></h2>
     <div id="trackSheetOpts" class="opts one"></div>
     <button id="btnCloseTrack" class="link">Cerrar</button>
+  </div>
+</div>
+
+<div id="listSheet" class="modal" hidden>
+  <div class="sheet tall">
+    <h2 id="listSheetTitle">Añadir a una lista</h2>
+    <div id="listOpts" class="pick"></div>
+    <div class="newrow">
+      <input id="newListName" type="text" maxlength="60" placeholder="Nombre de la nueva lista" autocomplete="off">
+      <button id="btnCreateList" class="primary small">Crear</button>
+    </div>
+    <button id="btnCloseListSheet" class="link">Cancelar</button>
+  </div>
+</div>
+
+<div id="confirmSheet" class="modal" hidden>
+  <div class="sheet">
+    <h2 id="confirmTitle"></h2>
+    <p id="confirmMsg" class="muted"></p>
+    <div class="opts"><button id="confirmNo">Cancelar</button><button id="confirmYes" class="on">Aceptar</button></div>
   </div>
 </div>
 

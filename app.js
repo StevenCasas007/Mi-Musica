@@ -113,14 +113,14 @@
     clearTimeout(p.to);
     err ? p.rej(err) : p.res(value);
   }
-  function requestToken(prompt) {
+  function requestToken(prompt, noHint) {
     if (refreshing) return refreshing;
     if (!tokenClient) return Promise.reject(authErr('google_no_listo'));
     const pr = new Promise((res, rej) => {
       pendingRefresh = { res, rej, to: setTimeout(() => settle(authErr('timeout')), 40000) };
     });
     refreshing = pr;
-    try { tokenClient.requestAccessToken({ prompt, ...(loginHint ? { hint: loginHint } : {}) }); }
+    try { tokenClient.requestAccessToken({ prompt, ...(loginHint && !noHint ? { hint: loginHint } : {}) }); }
     catch (e) { setTimeout(() => settle(authErr(e.message || 'error')), 0); }
     return pr;
   }
@@ -460,7 +460,7 @@
     if (tab === 'lists' && openList) {
       head.innerHTML = `<button id="back">‹ Listas</button><span style="flex:1;text-align:center">${esc(openList)}</span><button id="delList">Borrar</button>`;
       $('back').onclick = () => { openList = null; render(); };
-      $('delList').onclick = () => { if (confirm('¿Borrar la lista "' + openList + '"?')) { delete data.lists[openList]; saveData(); openList = null; render(); } };
+      $('delList').onclick = async () => { if (await ask('¿Borrar la lista?', '"' + openList + '" se eliminará (las canciones siguen en tu biblioteca).', 'Borrar')) { delete data.lists[openList]; saveData(); openList = null; render(); } };
     }
     const list = visibleTracks();
     if (!list.length) { el.innerHTML = `<div class="empty">${tracks.length ? 'Nada por aquí.' : 'Cargando tu música…'}</div>`; return; }
@@ -468,10 +468,45 @@
     bindRows(el, list.map(t => t.id));
   }
 
-  function newList() {
-    const n = (prompt('Nombre de la lista:') || '').trim();
-    if (!n) return; if (!data.lists[n]) data.lists[n] = []; saveData(); render();
+  // Ventana de confirmación (en vez de las ventanas feas del navegador)
+  function ask(title, msg, ok) {
+    return new Promise(res => {
+      $('confirmTitle').textContent = title; $('confirmMsg').textContent = msg || '';
+      $('confirmYes').textContent = ok || 'Aceptar'; $('confirmSheet').hidden = false;
+      const done = v => { $('confirmSheet').hidden = true; res(v); };
+      $('confirmYes').onclick = () => done(true); $('confirmNo').onclick = () => done(false);
+      $('confirmSheet').onclick = e => { if (e.target === $('confirmSheet')) done(false); };
+    });
   }
+
+  // Ventana de listas: elegir una existente o crear una nueva (con o sin canción)
+  let listTarget = null;
+  function openListSheet(id) {
+    listTarget = id || null;
+    $('listSheetTitle').textContent = id ? 'Añadir a una lista' : 'Nueva lista';
+    $('newListName').value = '';
+    $('btnCreateList').textContent = id ? 'Crear y añadir' : 'Crear';
+    const names = Object.keys(data.lists);
+    $('listOpts').hidden = !id || !names.length;
+    $('listOpts').innerHTML = !id ? '' : names.map(n => {
+      const hh = hueOf(n), has = data.lists[n].includes(id);
+      return `<button data-pick="${esc(n)}"><div class="cv ph" style="--h:${hh};--h2:${(hh + 40) % 360}">≡</div><div class="info"><div class="t">${esc(n)}</div><div class="a">${data.lists[n].length} canciones</div></div>${has ? '<span class="chk">✓</span>' : ''}</button>`;
+    }).join('');
+    $('listOpts').querySelectorAll('[data-pick]').forEach(b => b.onclick = () => finishList(b.dataset.pick));
+    $('listSheet').hidden = false;
+    if (!names.length || !id) setTimeout(() => $('newListName').focus(), 50);
+  }
+  function finishList(name) {
+    name = (name || '').trim(); if (!name) return;
+    const id = listTarget; $('listSheet').hidden = true;
+    if (!data.lists[name]) data.lists[name] = [];
+    if (id) {
+      if (data.lists[name].includes(id)) { toast('Ya estaba en "' + name + '"'); render(); return; }
+      data.lists[name].push(id); toast('Añadida a "' + name + '"');
+    } else toast('Lista "' + name + '" creada');
+    saveData(); render();
+  }
+  const newList = () => openListSheet(null);
 
   // Menú de una canción (los tres puntos)
   let sheetTrack = null;
@@ -499,20 +534,7 @@
       if (!$('queueSheet').hidden) renderQueue();
     }
   }
-  function addToList(id) {
-    const names = Object.keys(data.lists);
-    let name;
-    if (!names.length) { name = (prompt('Aún no tienes listas. Nombre de la nueva lista:') || '').trim(); }
-    else {
-      const c = prompt(names.map((n, i) => (i + 1) + ') ' + n).join('\n') + '\n\nEscribe el número, o un nombre nuevo:');
-      if (!c) return;
-      name = names[parseInt(c) - 1] || c.trim();
-    }
-    if (!name) return;
-    data.lists[name] = data.lists[name] || [];
-    if (!data.lists[name].includes(id)) data.lists[name].push(id);
-    saveData(); toast('Añadida a "' + name + '"'); render();
-  }
+  const addToList = id => openListSheet(id);
   function toggleFav(id) {
     const i = data.favs.indexOf(id);
     if (i >= 0) data.favs.splice(i, 1); else data.favs.push(id);
@@ -654,7 +676,7 @@
     const todo = tracks.filter(t => !thumbs.has(t.id) && !onlineCovers[t.id] && !noOnline.has(t.id));
     if (!todo.length) { toast('No hay más carátulas por buscar'); return; }
     const mins = Math.ceil(todo.length * 3.2 / 60);
-    if (!confirm(`Se buscarán carátulas en internet para ${todo.length} canciones. Tarda unos ${mins} min y debes dejar la app abierta. ¿Continuar?`)) return;
+    if (!(await ask('Buscar carátulas', `Se buscarán en internet para ${todo.length} canciones. Tarda unos ${mins} min y debes dejar la app abierta.`, 'Continuar'))) return;
     scanning = true; $('btnScan').textContent = 'Detener búsqueda';
     let n = 0, found = 0;
     for (const t of todo) {
@@ -788,13 +810,13 @@
       if (CONFIG.CLIENT_ID.startsWith('PEGA_AQUI')) { $('loginMsg').textContent = 'Falta configurar tu Client ID en config.js (mira el README).'; return; }
       $('loginMsg').textContent = '';
       // si Google aún está cargando (internet lento), espera unos segundos antes de rendirse
-      waitGoogle(6000).then(() => requestToken('consent')).catch(e => { $('loginMsg').textContent = authMsg(e.message); });
+      waitGoogle(6000).then(() => requestToken('select_account consent', true)).catch(e => { $('loginMsg').textContent = authMsg(e.message); });
     };
-    $('btnLogout').onclick = () => {
-      if (!confirm('¿Cerrar sesión?')) return;
+    $('btnLogout').onclick = async () => {
+      if (!(await ask('¿Cerrar sesión?', 'Podrás entrar de nuevo con la misma cuenta u otra.', 'Salir'))) return;
       if (token && window.google) google.accounts.oauth2.revoke(token, () => {});
       audio.pause(); token = null; started = false; userP = null; cloudOK = false; showAuthBar(false);
-      store.set('token', null); store.set('signedIn', false);
+      store.set('token', null); store.set('signedIn', false); loginHint = ''; store.set('hint', ''); store.set('dataFileId', null); dataFileId = null;
       $('mini').hidden = true; $('full').hidden = true; showLogin();
     };
     $('btnRefresh').onclick = () => loadLibrary(true);
@@ -818,6 +840,10 @@
     $('btnCloseSleep').onclick = () => $('sleepSheet').hidden = true;
     $('sleepSheet').onclick = e => { if (e.target === $('sleepSheet')) $('sleepSheet').hidden = true; };
     document.querySelectorAll('#sleepSheet [data-sleep]').forEach(b => b.onclick = () => { setSleep(b.dataset.sleep); $('sleepSheet').hidden = true; });
+    $('btnCreateList').onclick = () => finishList($('newListName').value);
+    $('newListName').onkeydown = e => { if (e.key === 'Enter') finishList(e.target.value); };
+    $('btnCloseListSheet').onclick = () => $('listSheet').hidden = true;
+    $('listSheet').onclick = e => { if (e.target === $('listSheet')) $('listSheet').hidden = true; };
     $('trackSheet').onclick = e => { const a = e.target.dataset && e.target.dataset.act; if (a) trackAction(a); else if (e.target === $('trackSheet') || e.target.id === 'btnCloseTrack') $('trackSheet').hidden = true; };
     $('btnShuffle').classList.toggle('on', shuffle);
     const toggle = () => audio.paused ? audio.play() : audio.pause();
