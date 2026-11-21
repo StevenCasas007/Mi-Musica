@@ -102,11 +102,13 @@
     <input id="vol" type="range" min="0" max="100" value="100" aria-label="Volumen">
   </div>
   <div class="extras">
-    <button id="btnRepeat" class="pill">Repetir: no</button>
     <button id="btnSpeed" class="pill">Velocidad 1×</button>
     <button id="btnEq" class="pill">Ecualizador</button>
-    <button id="btnLyrics" class="pill">Letra</button>
     <button id="btnAddList" class="pill">+ Añadir a una lista</button>
+  </div>
+  <div id="lyricsCard" class="lyrics-card">
+    <div class="lyrics-h">Letra</div>
+    <div id="lyricsBody" class="lyrics"></div>
   </div>
 </div>
 
@@ -128,14 +130,6 @@
     <button id="btnEditSave" class="primary small">Guardar</button>
     <button id="btnEditReset" class="link">Restablecer nombre original</button>
     <button id="btnEditCancel" class="link">Cancelar</button>
-  </div>
-</div>
-
-<div id="lyricsSheet" class="modal" hidden>
-  <div class="sheet tall">
-    <h2 id="lyricsTitle">Letra</h2>
-    <div id="lyricsBody" class="lyrics"></div>
-    <button id="btnCloseLyrics" class="link">Cerrar</button>
   </div>
 </div>
 

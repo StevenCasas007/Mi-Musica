@@ -1,6 +1,6 @@
 /* Mi Música — PWA que reproduce tu música guardada en Google Drive */
 (() => {
-  const APP_VERSION = 9;            // sube 1 en cada entrega (también en sw.js)
+  const APP_VERSION = 10;            // sube 1 en cada entrega (también en sw.js)
   const $ = id => document.getElementById(id);
   const audio = $('audio');
   const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
@@ -20,7 +20,7 @@
   let data = clean(store.get('data', null));
   let tab = 'all', openList = null, query = '', view = 'home';
   let recentIds = store.get('recent', []);
-  let sort = store.get('sort', 'name'), repeat = 'off', speed = store.get('speed', 1), eq = store.get('eq', [0, 0, 0]);
+  let sort = store.get('sort', 'name'), speed = store.get('speed', 1), eq = store.get('eq', [0, 0, 0]);
   let editList = false, pendingSeek = 0, counted = false, restored = false, editId = null, dlBusy = false;
   let plays = store.get('plays', []);                    // historial: {id, t}
   const off = store.get('off', {});                      // descargadas: id -> bytes
@@ -405,8 +405,6 @@
 
   // Velocidad y repetición
   function updateExtras() {
-    $('btnRepeat').textContent = 'Repetir: ' + (repeat === 'one' ? 'canción' : repeat === 'all' ? 'lista' : 'no');
-    $('btnRepeat').classList.toggle('on', repeat !== 'off');
     $('btnSpeed').textContent = 'Velocidad ' + speed + '×';
     $('btnSpeed').classList.toggle('on', speed !== 1);
     $('btnEq').classList.toggle('on', eq.some(x => x !== 0));
@@ -441,30 +439,38 @@
 
   // Letra (lrclib.net, gratis y sin cuenta)
   let lyricsLines = null;
-  async function openLyrics() {
-    const t = byId(queue[qi]); if (!t) return;
-    $('lyricsTitle').textContent = t.title; $('lyricsSheet').hidden = false;
-    const body = $('lyricsBody'); body.textContent = 'Buscando letra…'; lyricsLines = null;
+  const lyricsCache = new Map();
+  let lyricsId = null;
+  function renderLyrics(j) {
+    const body = $('lyricsBody'); lyricsLines = null; lyIdx = -1;
+    if (j && j.syncedLyrics) {
+      lyricsLines = j.syncedLyrics.split('\n').map(l => { const m = l.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return m ? { t: +m[1] * 60 + +m[2], s: m[3].trim() } : null; }).filter(x => x && x.s);
+      body.innerHTML = lyricsLines.map((l, i) => `<div class="ly" data-i="${i}">${esc(l.s)}</div>`).join('');
+    } else if (j && j.plainLyrics) body.innerHTML = `<div class="plain">${esc(j.plainLyrics)}</div>`;
+    else body.innerHTML = '<div class="nolyr">No encontré la letra de esta canción.</div>';
+  }
+  async function loadLyrics() {
+    const t = byId(queue[qi]); if (!t || lyricsId === t.id) return;
+    lyricsId = t.id;
+    if (lyricsCache.has(t.id)) { renderLyrics(lyricsCache.get(t.id)); return; }
+    $('lyricsBody').innerHTML = '<div class="nolyr">Buscando letra…</div>'; lyricsLines = null;
     try {
       const first = artistsOf(t)[0] || '';
       const q = new URLSearchParams({ track_name: t.title.replace(/\s*[\(\[].*?[\)\]]/g, ''), artist_name: first });
       let r = await fetch('https://lrclib.net/api/get?' + q), j = r.ok ? await r.json() : null;
       if (!j) { r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent((first + ' ' + t.title).trim())); const arr = r.ok ? await r.json() : []; j = arr[0] || null; }
-      if (queue[qi] !== t.id) return;
-      if (j && j.syncedLyrics) {
-        lyricsLines = j.syncedLyrics.split('\n').map(l => { const m = l.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return m ? { t: +m[1] * 60 + +m[2], s: m[3].trim() } : null; }).filter(x => x && x.s);
-        body.innerHTML = lyricsLines.map((l, i) => `<div class="ly" data-i="${i}">${esc(l.s)}</div>`).join('');
-      } else if (j && j.plainLyrics) { body.innerHTML = `<div class="plain">${esc(j.plainLyrics)}</div>`; }
-      else body.textContent = 'No encontré la letra de esta canción.';
-    } catch { body.textContent = 'No se pudo buscar la letra. Revisa tu internet.'; }
+      lyricsCache.set(t.id, j || {});
+      if (lyricsId === t.id) renderLyrics(j);
+    } catch { if (lyricsId === t.id) { lyricsId = null; $('lyricsBody').innerHTML = '<div class="nolyr">No se pudo buscar la letra. Revisa tu internet.</div>'; } }
   }
   let lyIdx = -1;
   function syncLyrics() {
-    if (!lyricsLines || $('lyricsSheet').hidden) return;
+    if (!lyricsLines || $('full').hidden) return;
     let i = -1; for (let k = 0; k < lyricsLines.length; k++) { if (lyricsLines[k].t <= audio.currentTime + 0.2) i = k; else break; }
     if (i === lyIdx) return; lyIdx = i;
     document.querySelectorAll('#lyricsBody .ly').forEach(e => e.classList.toggle('on', +e.dataset.i === i));
-    const el = document.querySelector('#lyricsBody .ly.on'); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const el = document.querySelector('#lyricsBody .ly.on');
+    if (el) { const r = $('lyricsCard').getBoundingClientRect(); if (r.top < innerHeight * .8 && r.bottom > 0) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
   }
 
   // Descargas para oír sin internet
@@ -791,7 +797,7 @@
     const id = queue[qi], t = byId(id); if (!t) return;
     counted = false; lyIdx = -1; saveQueue();
     showPlayer(t, null);
-    if (!$('lyricsSheet').hidden) openLyrics();
+    lyricsId = null;
     try {
       const blob = await fetchBlob(id);
       if (queue[qi] !== id) return;                       // el usuario cambió de canción mientras cargaba
@@ -932,6 +938,7 @@
     const c = cover || coverUrl(t.id, true);
     $('miniCover').src = $('fullCover').src = c || phDataUrl(t);
     updateFavBtn(); updateMediaSession(t, c); applyTint(t, c);
+    if (!$('full').hidden) loadLyrics();
     if (!$('queueSheet').hidden) renderQueue();
   }
   function updateFavBtn() {
@@ -1088,13 +1095,10 @@
       toast(shuffle ? 'Aleatorio activado' : 'Aleatorio desactivado');
     };
     $('btnFav').onclick = () => queue[qi] && toggleFav(queue[qi]);
-    $('btnRepeat').onclick = () => { repeat = repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off'; updateExtras(); };
     $('btnSpeed').onclick = () => { const s = [1, 1.25, 1.5, 2, 0.75]; speed = s[(s.indexOf(speed) + 1) % s.length]; store.set('speed', speed); updateExtras(); };
     $('btnEq').onclick = () => { eqUI(); $('eqSheet').hidden = false; };
     $('btnCloseEq').onclick = () => $('eqSheet').hidden = true;
     ['eqLow', 'eqMid', 'eqHigh'].forEach((id, i) => { $(id).oninput = e => { eq[i] = +e.target.value; store.set('eq', eq); eqApply(); updateExtras(); eqUI(); }; });
-    $('btnLyrics').onclick = openLyrics;
-    $('btnCloseLyrics').onclick = () => $('lyricsSheet').hidden = true;
     $('fullArtist').onclick = () => { const t = byId(queue[qi]); const n = t && artistsOf(t)[0]; if (n) openArtist(n); };
     $('btnCloseArtist').onclick = () => $('artistSheet').hidden = true;
     $('btnEditSave').onclick = () => saveEdit(false);
@@ -1103,12 +1107,12 @@
     $('btnQueueToList').onclick = () => { if (queue.length) { $('queueSheet').hidden = true; openListSheet(queue.slice()); } };
     $('btnDlFavs').onclick = () => downloadMany(data.favs);
     $('btnClearOff').onclick = async () => { if (await ask('¿Borrar las descargas?', 'Las canciones seguirán en tu Drive, solo se quitan de este celular.', 'Borrar')) { await offRemove(Object.keys(off)); render(); updateOffInfo(); toast('Descargas borradas'); } };
-    ['artistSheet', 'editSheet', 'lyricsSheet', 'eqSheet'].forEach(id => { $(id).addEventListener('click', e => { if (e.target === $(id)) $(id).hidden = true; }); });
+    ['artistSheet', 'editSheet', 'eqSheet'].forEach(id => { $(id).addEventListener('click', e => { if (e.target === $(id)) $(id).hidden = true; }); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePos(); });
     audio.addEventListener('pause', savePos);
     updateExtras();
     $('btnAddList').onclick = () => queue[qi] && addToList(queue[qi]);
-    $('mini').onclick = () => $('full').hidden = false;
+    $('mini').onclick = () => { $('full').hidden = false; loadLyrics(); };
     $('btnClose').onclick = () => $('full').hidden = true;
     $('seek').oninput = e => { if (isFinite(audio.duration)) audio.currentTime = e.target.value / 1000 * audio.duration; };
 
@@ -1134,8 +1138,6 @@
 
     audio.onplay = audio.onpause = () => { setPlayIcons(); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing'; };
     audio.onended = () => {
-      if (repeat === 'one' && !sleepAfterSong) { audio.currentTime = 0; counted = false; audio.play(); return; }
-      if (repeat === 'off' && qi === queue.length - 1 && !sleepAfterSong) { audio.pause(); audio.currentTime = 0; return; }
       if (sleepAfterSong) { sleepAfterSong = false; updateSleepUI(); toast('Música detenida. ¡Buenas noches!'); return; } next(); };
     audio.onerror = () => { if (!audio.getAttribute('src')) return; toast('Error al reproducir, pasando a la siguiente…'); setTimeout(next, 800); };
     audio.ontimeupdate = () => {
